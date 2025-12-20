@@ -107,51 +107,51 @@ if uploaded_file is not None:
     # Текущая погода
     st.subheader("Мониторинг текущей температуры")
     
-    api_key = st.text_input("Введите API ключ OpenWeatherMap:", type="password")
+    # Автоматически берём ключ из secrets
+    try:
+        api_key = st.secrets["OPENWEATHER_API_KEY"]
+    except:
+        # Fallback для локальной разработки
+        api_key = "33d807253e84ec4f0f076145433eb5c1"
     
-    if api_key:
-        st.info("Введите API ключ, чтобы получить текущую температуру")
+    # Сразу получаем температуру
+    current_temp, error = get_current_temp_sync(selected_city, api_key)
+    
+    if error:
+        st.error(f"Ошибка: {error}")
     else:
-        st.info("Введите API ключ, чтобы получить текущую температуру")
-    
-    if api_key:
-        current_temp, error = get_current_temp_sync(selected_city, api_key)
+        st.success(f"Текущая температура в {selected_city}: **{current_temp}°C**")
         
-        if error:
-            st.error(f"Ошибка: {error}")
+        # Определяем сезон
+        current_month = datetime.now().month
+        if current_month in [12, 1, 2]:
+            current_season = "winter"
+        elif current_month in [3, 4, 5]:
+            current_season = "spring"
+        elif current_month in [6, 7, 8]:
+            current_season = "summer"
         else:
-            st.success(f"Текущая температура в {selected_city}: **{current_temp}°C**")
+            current_season = "autumn"
+        
+        season_data = city_season_stats[city_season_stats["season"] == current_season]
+        
+        if len(season_data) > 0:
+            mean_temp = season_data["mean"].values[0]
+            std_temp = season_data["std"].values[0]
             
-            # Определяем сезон
-            current_month = datetime.now().month
-            if current_month in [12, 1, 2]:
-                current_season = "winter"
-            elif current_month in [3, 4, 5]:
-                current_season = "spring"
-            elif current_month in [6, 7, 8]:
-                current_season = "summer"
+            lower_bound = mean_temp - 2 * std_temp
+            upper_bound = mean_temp + 2 * std_temp
+            
+            st.write(f"**Норма для сезона {current_season}:** {lower_bound:.1f}°C — {upper_bound:.1f}°C")
+            
+            is_anomaly = (current_temp < lower_bound) or (current_temp > upper_bound)
+            
+            if is_anomaly:
+                st.error("⚠️ Текущая температура АНОМАЛЬНАЯ для этого сезона!")
             else:
-                current_season = "autumn"
-            
-            season_data = city_season_stats[city_season_stats["season"] == current_season]
-            
-            if len(season_data) > 0:
-                mean_temp = season_data["mean"].values[0]
-                std_temp = season_data["std"].values[0]
-                
-                lower_bound = mean_temp - 2 * std_temp
-                upper_bound = mean_temp + 2 * std_temp
-                
-                st.write(f"**Норма для сезона {current_season}:** {lower_bound:.1f}°C — {upper_bound:.1f}°C")
-                
-                is_anomaly = (current_temp < lower_bound) or (current_temp > upper_bound)
-                
-                if is_anomaly:
-                    st.error("⚠️ Текущая температура АНОМАЛЬНАЯ для этого сезона!")
-                else:
-                    st.success("✅ Текущая температура в пределах нормы")
-            else:
-                st.warning("Нет данных для текущего сезона")
+                st.success("✅ Текущая температура в пределах нормы")
+        else:
+            st.warning("Нет данных для текущего сезона")
     
     # Инфо
     with st.expander("ℹ️ О методах получения данных"):
