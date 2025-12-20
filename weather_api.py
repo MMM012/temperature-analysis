@@ -59,7 +59,7 @@ async def get_current_temp_async(cities, api_key):
 
 if __name__ == "__main__":
     # тестируем
-    key = "33d807253e84ec4f0f076145433eb5c1"
+    key = "YOUR_API_KEY_HERE"
     
     print("Синхронно:")
     t, e = get_current_temp_sync("Moscow", key)
