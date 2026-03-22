@@ -7,161 +7,191 @@ from analysis import load_data, compute_rolling, compute_season_stats, mark_anom
 from weather_api import get_current_temp_sync
 
 
-# Заголовок
-st.title("Анализ температурных данных")
-st.write("Приложение для анализа исторических данных о температуре и мониторинга текущей погоды")
+st.title("Анализ температур и текущей погоды")
+st.write(
+    "Загрузка исторических данных, поиск аномалий и мониторинг текущей температуры "
+    "через OpenWeatherMap."
+)
 
-# Загрузка файла
-uploaded_file = st.file_uploader("Загрузите CSV файл с историческими данными", type=["csv"])
+
+# Загрузка CSV с историческими данными
+uploaded_file = st.file_uploader(
+    "Загрузите файл temperature_data.csv", type=["csv"]
+)
+
+# Форма для ввода API-ключа
+with st.form("api_form"):
+    api_key = st.text_input(
+        "Введите API-ключ OpenWeatherMap",
+        type="password",
+        help="При пустом ключе запрос текущей погоды выполняться не будет.",
+    )
+    submitted = st.form_submit_button("Сохранить ключ")
 
 if uploaded_file is not None:
-    # Читаем данные
+    # Чтение данных
     df = pd.read_csv(uploaded_file, parse_dates=["timestamp"])
-    st.success(f"Файл загружен! Всего записей: {len(df)}")
-    
-    # Обрабатываем
+
+    st.success(f"Файл загружен. Всего записей: {len(df)}")
+
+    # Аналитика
     df = compute_rolling(df)
     season_stats = compute_season_stats(df)
-    df = mark_anomalies(df, season_stats)
-    
+    df = mark_anomalies(df)
+
     # Выбор города
-    st.subheader("Выберите город для анализа")
+    st.subheader("Выбор города")
     cities = sorted(df["city"].unique())
-    selected_city = st.selectbox("Город:", cities)
-    
-    # Фильтруем
+    selected_city = st.selectbox("Город", cities)
+
     city_df = df[df["city"] == selected_city].copy()
-    
-    # Статистика
-    st.subheader(f"Статистика для города {selected_city}")
+    city_season_stats = season_stats[season_stats["city"] == selected_city]
+
+    # Описательная статистика
+    st.subheader(f"Описательная статистика для {selected_city}")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("Всего записей", len(city_df))
+        st.metric("Количество записей", len(city_df))
     with col2:
-        st.metric("Найдено аномалий", city_df["is_anomaly"].sum())
+        anomalies_count = int(city_df["is_anomaly"].sum())
+        st.metric("Аномалий", anomalies_count)
     with col3:
-        anomaly_percent = (city_df["is_anomaly"].sum() / len(city_df)) * 100
+        anomaly_percent = city_df["is_anomaly"].mean() * 100 if len(city_df) > 0 else 0.0
         st.metric("% аномалий", f"{anomaly_percent:.1f}%")
-    
-    # График
-    st.subheader("График температуры с выделением аномалий")
-    
+
+    st.write("Базовая статистика по температуре:")
+    st.dataframe(
+        city_df["temperature"].describe().to_frame().T
+    )
+
+    # Временной ряд с аномалиями
+    st.subheader("Временной ряд температур с выделением аномалий")
+
     fig = go.Figure()
-    
+
     normal_data = city_df[~city_df["is_anomaly"]]
-    fig.add_trace(go.Scatter(
-        x=normal_data["timestamp"],
-        y=normal_data["temperature"],
-        mode="markers",
-        name="Нормальная температура",
-        marker=dict(color="blue", size=3)
-    ))
-    
+    fig.add_trace(
+        go.Scatter(
+            x=normal_data["timestamp"],
+            y=normal_data["temperature"],
+            mode="markers",
+            name="Нормальная температура",
+            marker=dict(color="blue", size=3),
+        )
+    )
+
     anomaly_data = city_df[city_df["is_anomaly"]]
-    fig.add_trace(go.Scatter(
-        x=anomaly_data["timestamp"],
-        y=anomaly_data["temperature"],
-        mode="markers",
-        name="Аномалия",
-        marker=dict(color="red", size=5)
-    ))
-    
-    fig.add_trace(go.Scatter(
-        x=city_df["timestamp"],
-        y=city_df["rolling_mean"],
-        mode="lines",
-        name="Скользящее среднее (30 дней)",
-        line=dict(color="green", width=2)
-    ))
-    
+    fig.add_trace(
+        go.Scatter(
+            x=anomaly_data["timestamp"],
+            y=anomaly_data["temperature"],
+            mode="markers",
+            name="Аномалии",
+            marker=dict(color="red", size=5),
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=city_df["timestamp"],
+            y=city_df["rolling_mean"],
+            mode="lines",
+            name="Скользящее среднее (30 дней)",
+            line=dict(color="green", width=2),
+        )
+    )
+
     fig.update_layout(
         xaxis_title="Дата",
         yaxis_title="Температура (°C)",
-        hovermode="x unified"
+        hovermode="x unified",
     )
-    
+
     st.plotly_chart(fig, use_container_width=True)
-    
-    # Сезоны
-    st.subheader("Статистика по сезонам")
-    city_season_stats = season_stats[season_stats["city"] == selected_city]
-    
+
+    # Сезонные профили
+    st.subheader("Сезонные профили")
+
     fig2 = go.Figure()
-    fig2.add_trace(go.Bar(
-        x=city_season_stats["season"],
-        y=city_season_stats["mean"],
-        name="Средняя температура",
-        error_y=dict(type="data", array=city_season_stats["std"])
-    ))
-    
+    fig2.add_trace(
+        go.Bar(
+            x=city_season_stats["season"],
+            y=city_season_stats["mean"],
+            name="Средняя температура",
+            error_y=dict(type="data", array=city_season_stats["std"]),
+        )
+    )
     fig2.update_layout(
         xaxis_title="Сезон",
-        yaxis_title="Температура (°C)"
+        yaxis_title="Температура (°C)",
     )
-    
     st.plotly_chart(fig2, use_container_width=True)
-    
-    st.write("Детальная статистика:")
+
+    st.write("Таблица сезонной статистики:")
     st.dataframe(city_season_stats)
-    
-    # Текущая погода
-    st.subheader("Мониторинг текущей температуры")
-    
-    # Автоматически берём ключ из secrets
-    try:
-        api_key = st.secrets["OPENWEATHER_API_KEY"]
-    except:
-        # Fallback для локальной разработки
-        api_key = "33d807253e84ec4f0f076145433eb5c1"
-    
-    # Сразу получаем температуру
-    current_temp, error = get_current_temp_sync(selected_city, api_key)
-    
-    if error:
-        st.error(f"Ошибка: {error}")
+
+    # Текущая температура и проверка на аномальность
+    st.subheader("Текущая температура и её аномальность")
+
+    if not api_key:
+        st.info("API-ключ не указан. Введите ключ, чтобы получить текущую погоду.")
     else:
-        st.success(f"Текущая температура в {selected_city}: **{current_temp}°C**")
-        
-        # Определяем сезон
-        current_month = datetime.now().month
-        if current_month in [12, 1, 2]:
-            current_season = "winter"
-        elif current_month in [3, 4, 5]:
-            current_season = "spring"
-        elif current_month in [6, 7, 8]:
-            current_season = "summer"
+        current_temp, error = get_current_temp_sync(selected_city, api_key)
+
+        if error:
+            st.error(f"Ошибка при запросе: {error}")
         else:
-            current_season = "autumn"
-        
-        season_data = city_season_stats[city_season_stats["season"] == current_season]
-        
-        if len(season_data) > 0:
-            mean_temp = season_data["mean"].values[0]
-            std_temp = season_data["std"].values[0]
-            
-            lower_bound = mean_temp - 2 * std_temp
-            upper_bound = mean_temp + 2 * std_temp
-            
-            st.write(f"**Норма для сезона {current_season}:** {lower_bound:.1f}°C — {upper_bound:.1f}°C")
-            
-            is_anomaly = (current_temp < lower_bound) or (current_temp > upper_bound)
-            
-            if is_anomaly:
-                st.error("⚠️ Текущая температура АНОМАЛЬНАЯ для этого сезона!")
+            st.success(f"Текущая температура в {selected_city}: {current_temp}°C")
+
+            # Определяем текущий сезон (схема совпадает с генерацией данных)
+            month = datetime.now().month
+            if month in [12, 1, 2]:
+                current_season = "winter"
+            elif month in [3, 4, 5]:
+                current_season = "spring"
+            elif month in [6, 7, 8]:
+                current_season = "summer"
             else:
-                st.success("✅ Текущая температура в пределах нормы")
-        else:
-            st.warning("Нет данных для текущего сезона")
-    
-    # Инфо
-    with st.expander("ℹ️ О методах получения данных"):
-        st.write("""
-        **Синхронный подход:**
-        Запросы по очереди. Простой, но медленный при большом количестве городов.
-        
-        **Асинхронный подход:**
-        Запросы параллельно. Быстрее для нескольких городов сразу.
-        """)
+                current_season = "autumn"
+
+            st.write(f"Текущий сезон: **{current_season}**")
+
+            season_row = city_season_stats[
+                city_season_stats["season"] == current_season
+            ]
+
+            if len(season_row) == 0:
+                st.warning("Нет исторических данных для текущего сезона.")
+            else:
+                mean_temp = season_row["mean"].values[0]
+                std_temp = season_row["std"].values[0]
+
+                lower = mean_temp - 2 * std_temp
+                upper = mean_temp + 2 * std_temp
+
+                st.write(
+                    f"Нормальный диапазон для сезона: "
+                    f"{lower:.1f}°C — {upper:.1f}°C"
+                )
+
+                is_anomaly = (current_temp < lower) or (current_temp > upper)
+
+                if is_anomaly:
+                    st.error("Текущая температура АНОМАЛЬНАЯ для этого сезона.")
+                else:
+                    st.success("Текущая температура в пределах сезонной нормы.")
+
+    with st.expander("О способах получения текущей температуры"):
+        st.write(
+            """
+            **Синхронный способ** делает запросы последовательно — код проще,
+            но при большом количестве городов запросы занимают больше времени.
+
+            **Асинхронный способ** позволяет отправлять несколько запросов параллельно.
+            В отдельном модуле `weather_api.py` проведён небольшой эксперимент
+            по измерению времени для обоих подходов.
+            """
+        )
 
 else:
-    st.info("👆 Загрузите CSV файл для начала анализа")
+    st.info("Загрузите файл с историческими данными, чтобы начать анализ.")

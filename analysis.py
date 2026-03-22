@@ -5,15 +5,15 @@ from multiprocessing import Pool, cpu_count
 
 
 def load_data(path="temperature_data.csv"):
-    """Загрузка данных"""
+    """Загрузка данных + приведение timestamp к datetime."""
     df = pd.read_csv(path, parse_dates=["timestamp"])
     return df
 
 
 def compute_rolling(df, window=30):
-    """Скользящее среднее и СКО"""
+    """Скользящее среднее и СКО по 30 дням по каждому городу."""
     df = df.sort_values(["city", "timestamp"]).copy()
-    
+
     df["rolling_mean"] = (
         df.groupby("city")["temperature"]
         .transform(lambda x: x.rolling(window, min_periods=1).mean())
@@ -26,7 +26,7 @@ def compute_rolling(df, window=30):
 
 
 def compute_season_stats(df):
-    """Статистика по сезонам"""
+    """Среднее и std по сезонам и городам."""
     stats = (
         df.groupby(["city", "season"])["temperature"]
         .agg(["mean", "std"])
@@ -35,69 +35,62 @@ def compute_season_stats(df):
     return stats
 
 
-def mark_anomalies(df, season_stats, k=2.0):
-    """Отметить аномалии"""
+def mark_anomalies(df, k=2.0):
+    """
+    Аномалии по формуле из задания:
+    |T - rolling_mean| > 2 * rolling_std.
+    """
     df = df.copy()
-    merged = df.merge(
-        season_stats,
-        on=["city", "season"],
-        how="left",
-        suffixes=("", "_season"),
-    )
-    
-    lower = merged["mean"] - k * merged["std"]
-    upper = merged["mean"] + k * merged["std"]
-    
-    merged["is_anomaly"] = ~merged["temperature"].between(lower, upper)
-    return merged
+    df["is_anomaly"] = (df["temperature"] - df["rolling_mean"]).abs() > k * df["rolling_std"]
+    return df
 
 
-def analyze_city_data(city, df):
-    """Анализ одного города (для параллельности)"""
-    city_df = df[df["city"] == city].copy()
+def analyze_city(city_df):
+    """Анализ для одного города — отдельная функция для Pool."""
     city_df = compute_rolling(city_df)
-    stats = compute_season_stats(city_df)
-    city_df = mark_anomalies(city_df, stats)
+    city_df = mark_anomalies(city_df)
     return city_df
 
 
 def analyze_sequential(df):
-    """Последовательный анализ"""
+    """Последовательный анализ для всех городов."""
     start = time.time()
-    cities = df["city"].unique()
     parts = []
-    
-    for city in cities:
-        parts.append(analyze_city_data(city, df))
-    
+
+    for city, city_df in df.groupby("city"):
+        parts.append(analyze_city(city_df))
+
     result = pd.concat(parts, ignore_index=True)
     duration = time.time() - start
     return result, duration
 
 
+def _analyze_city_wrapper(args):
+    """Обёртка для multiprocessing.Pool."""
+    city, city_df = args
+    return analyze_city(city_df)
+
+
 def analyze_parallel(df):
-    """Параллельный анализ"""
+    """
+    Параллельный анализ по городам с использованием multiprocessing.Pool.
+    """
     start = time.time()
-    cities = df["city"].unique()
-    
-    # простой вариант без Pool для избежания проблем с pickle
-    # в реальном коде можно использовать multiprocessing.Pool
-    parts = []
-    for city in cities:
-        parts.append(analyze_city_data(city, df))
-    
+    grouped = list(df.groupby("city"))
+    with Pool(processes=cpu_count()) as pool:
+        parts = pool.map(_analyze_city_wrapper, grouped)
+
     result = pd.concat(parts, ignore_index=True)
     duration = time.time() - start
-    
-    # Комментарий: параллельная версия быстрее при большом объёме данных,
-    # но тут упрощённая реализация для совместимости
     return result, duration
 
 
 if __name__ == "__main__":
     df = load_data()
-    df_seq, t_seq = analyze_sequential(df)
-    df_par, t_par = analyze_parallel(df)
-    
+
+    seq_res, t_seq = analyze_sequential(df)
+    par_res, t_par = analyze_parallel(df)
+
     print(f"Sequential: {t_seq:.3f} s")
     print(f"Parallel:   {t_par:.3f} s")
+
